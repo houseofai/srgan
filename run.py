@@ -177,45 +177,50 @@ class SRGAN:
         return Model(d0, validity)
 
     def train(self, epochs, batch_size=1, sample_interval=50):
-
-        ds_hr, ds_lr = dl.get_data()
+        self.sample_images(5)
+        ds_hr, ds_lr = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
 
         for epoch in trange(epochs):
-
+            disc_turn = True
             for (imgs_hr, y), (imgs_lr, y) in zip(ds_hr, ds_lr):
-                # ----------------------
-                #  Train Discriminator
-                # ----------------------
-                # Sample images and their conditioning counterparts
-                # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
 
-                # From low res. image generate high res. version
-                fake_hr = self.generator.predict(imgs_lr)
+                if disc_turn:
+                    # ----------------------
+                    #  Train Discriminator
+                    # ----------------------
+                    # Sample images and their conditioning counterparts
+                    # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
+                    # From low res. image generate high res. version
+                    fake_hr = self.generator.predict(imgs_lr)
 
-                valid = np.ones((batch_size,) + self.disc_patch)
-                fake = np.zeros((batch_size,) + self.disc_patch)
+                    valid = np.ones((batch_size,) + self.disc_patch)
+                    fake = np.zeros((batch_size,) + self.disc_patch)
 
-                # Train the discriminators (original images = real / generated = Fake)
-                d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
-                d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
-                d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+                    # Train the discriminators (original images = real / generated = Fake)
 
-                # ------------------
-                #  Train Generator
-                # ------------------
+                    print(imgs_hr.shape, valid.shape)
+                    d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
+                    d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
+                    d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+                    disc_turn = False
+                else:
+                    # ------------------
+                    #  Train Generator
+                    # ------------------
 
-                # Sample images and their conditioning counterparts
-                imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
+                    # Sample images and their conditioning counterparts
+                    #imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
 
-                # The generators want the discriminators to label the generated images as real
-                valid = np.ones((batch_size,) + self.disc_patch)
+                    # The generators want the discriminators to label the generated images as real
+                    valid = np.ones((batch_size,) + self.disc_patch)
 
-                # Extract ground truth image features using pre-trained VGG19 model
-                image_features = self.vgg.predict(imgs_hr)
+                    # Extract ground truth image features using pre-trained VGG19 model
+                    image_features = self.vgg.predict(imgs_hr)
 
-                # Train the generators
-                g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
-                print("Loss: ", g_loss)
+                    # Train the generators
+                    g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
+                    #print("Loss: ", g_loss)
+                    disc_turn = True
 
             # If at save interval => save generated image samples
             if epoch % sample_interval == 0:
@@ -262,4 +267,4 @@ class SRGAN:
 
 if __name__ == '__main__':
     gan = SRGAN()
-    gan.train(epochs=30000, batch_size=16, sample_interval=50)
+    gan.train(epochs=3000, batch_size=16, sample_interval=100)

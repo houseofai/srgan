@@ -2,7 +2,6 @@ from glob import glob
 import numpy as np
 from PIL import Image
 import tensorflow as tf
-from tensorflow.keras import layers
 
 
 class DataLoader:
@@ -25,8 +24,8 @@ class DataLoader:
             h, w, c = self.img_res
             low_h, low_w = int(h / 4), int(w / 4)
 
-            img_hr = img.resize((h, w))
-            img_lr = img.resize((low_h, low_w))
+            img_hr = np.array(img.resize((h, w)))
+            img_lr = np.array(img.resize((low_h, low_w)))
 
             # If training => do random flip
             if not is_testing and np.random.random() < 0.5:
@@ -42,32 +41,16 @@ class DataLoader:
         return imgs_hr, imgs_lr
 
 
-def get_data(data_dir="./data/", img_res=(128, 128), batch_size=32):
-    low_h, low_w = int(img_res[0] / 4), int(img_res[0] / 4)
+def get_data(hr_size, batch_size, data_dir="./data/"):
+    low_h, low_w = int(hr_size[0] / 4), int(hr_size[0] / 4)
     normalization_layer = tf.keras.layers.experimental.preprocessing.Rescaling(1. / 127.5)
-
-    ds_hr = tf.keras.preprocessing.image_dataset_from_directory(data_dir,
-                                                                # validation_split=0.2,
-                                                                # subset="training",
-                                                                seed=123,
-                                                                image_size=img_res,
-                                                                batch_size=batch_size
-                                                                )
-
-    ds_lr = tf.keras.preprocessing.image_dataset_from_directory(data_dir,
-                                                                # validation_split=0.2,
-                                                                # subset="training",
-                                                                seed=123,
-                                                                image_size=(low_h, low_w),
-                                                                batch_size=batch_size
-                                                                )
+    print("Preprocessing data for HR{} and LR{}".format(hr_size, (low_h, low_w)))
+    ds = tf.keras.preprocessing.image_dataset_from_directory(data_dir, batch_size=batch_size) \
+        .map(lambda x, y: ((x / 127.5 - 1.), y)) \
+        .map(lambda x, y: (tf.image.random_flip_left_right(x), y))
 
     AUTOTUNE = tf.data.experimental.AUTOTUNE
-    ds_hr = ds_hr.map(lambda x, y: (normalization_layer(x), y)) \
-        .map(lambda x, y: (tf.image.random_flip_left_right(x), y)) \
-        .cache().prefetch(buffer_size=AUTOTUNE)
-    ds_lr = ds_lr.map(lambda x, y: (normalization_layer(x), y)) \
-        .map(lambda x, y: (tf.image.random_flip_left_right(x), y)) \
-        .cache().prefetch(buffer_size=AUTOTUNE)
+    ds_hr = ds.map(lambda x, y: (tf.image.resize(x, hr_size), y)).cache().prefetch(buffer_size=AUTOTUNE)
+    ds_lr = ds.map(lambda x, y: (tf.image.resize(x, (low_h, low_w)), y)).cache().prefetch(buffer_size=AUTOTUNE)
 
     return ds_hr, ds_lr
