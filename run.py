@@ -19,8 +19,10 @@ from tensorflow.keras.optimizers import Adam
 import datetime
 import matplotlib.pyplot as plt
 from data_loader import DataLoader
+import data_loader as dl
 import numpy as np
 import os
+from tqdm import trange
 
 
 class SRGAN:
@@ -176,47 +178,44 @@ class SRGAN:
 
     def train(self, epochs, batch_size=1, sample_interval=50):
 
-        start_time = datetime.datetime.now()
+        ds_hr, ds_lr = dl.get_data()
 
-        for epoch in range(epochs):
+        for epoch in trange(epochs):
 
-            # ----------------------
-            #  Train Discriminator
-            # ----------------------
+            for (imgs_hr, y), (imgs_lr, y) in zip(ds_hr, ds_lr):
+                # ----------------------
+                #  Train Discriminator
+                # ----------------------
+                # Sample images and their conditioning counterparts
+                # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
 
-            # Sample images and their conditioning counterparts
-            imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
+                # From low res. image generate high res. version
+                fake_hr = self.generator.predict(imgs_lr)
 
-            # From low res. image generate high res. version
-            fake_hr = self.generator.predict(imgs_lr)
+                valid = np.ones((batch_size,) + self.disc_patch)
+                fake = np.zeros((batch_size,) + self.disc_patch)
 
-            valid = np.ones((batch_size,) + self.disc_patch)
-            fake = np.zeros((batch_size,) + self.disc_patch)
+                # Train the discriminators (original images = real / generated = Fake)
+                d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
+                d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
+                d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
 
-            # Train the discriminators (original images = real / generated = Fake)
-            d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
-            d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
-            d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+                # ------------------
+                #  Train Generator
+                # ------------------
 
-            # ------------------
-            #  Train Generator
-            # ------------------
+                # Sample images and their conditioning counterparts
+                imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
 
-            # Sample images and their conditioning counterparts
-            imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
+                # The generators want the discriminators to label the generated images as real
+                valid = np.ones((batch_size,) + self.disc_patch)
 
-            # The generators want the discriminators to label the generated images as real
-            valid = np.ones((batch_size,) + self.disc_patch)
+                # Extract ground truth image features using pre-trained VGG19 model
+                image_features = self.vgg.predict(imgs_hr)
 
-            # Extract ground truth image features using pre-trained VGG19 model
-            image_features = self.vgg.predict(imgs_hr)
-
-            # Train the generators
-            g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
-
-            elapsed_time = datetime.datetime.now() - start_time
-            # Plot the progress
-            print("%d time: %s" % (epoch, elapsed_time))
+                # Train the generators
+                g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
+                print("Loss: ", g_loss)
 
             # If at save interval => save generated image samples
             if epoch % sample_interval == 0:
@@ -254,7 +253,13 @@ class SRGAN:
             fig.savefig('images/%s/%d_lowres%d.png' % (self.dataset_name, epoch, i))
             plt.close()
 
+    def save_img(self, img, epoch):
+        fig = plt.figure()
+        plt.imshow(img)
+        fig.savefig('images/%s/%d_lowres%d.png' % (self.dataset_name, epoch, 0))
+        plt.close()
+
 
 if __name__ == '__main__':
     gan = SRGAN()
-    gan.train(epochs=30000, batch_size=1, sample_interval=50)
+    gan.train(epochs=30000, batch_size=16, sample_interval=50)
