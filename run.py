@@ -187,17 +187,8 @@ class SRGAN:
         return Model(d0, validity)
 
     def train(self, epochs, batch_size=1, sample_interval=50):
-        self.sample_images(5)
-
-        options = tf.data.Options()
-        options.experimental_distribute.auto_shard_policy = AutoShardPolicy.OFF
-
+        #self.sample_images(5)
         ds_hr, ds_lr = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
-
-        ds_hr = self.strategy.experimental_distribute_dataset(ds_hr.with_options(options))
-        ds_lr = self.strategy.experimental_distribute_dataset(ds_lr.with_options(options))
-
-        #ds_hr, ds_lr = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
 
         for epoch in trange(epochs):
             disc_turn = True
@@ -246,11 +237,11 @@ class SRGAN:
                     disc_turn = True
 
             # If at save interval => save generated image samples
-            if epoch % sample_interval == 0:
-                self.sample_images(epoch)
-                self.discriminator.save_weights("./checkpoints_disc")
-                self.generator.save_weights("./checkpoints_gen")
-                self.combined.save_weights("./checkpoints_comb")
+            #if epoch % sample_interval == 0:
+            self.sample_images(epoch)
+            self.discriminator.save_weights("./checkpoints_disc")
+            self.generator.save_weights("./checkpoints_gen")
+            self.combined.save_weights("./checkpoints_comb")
 
     def sample_images(self, epoch):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
