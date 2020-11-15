@@ -1,7 +1,8 @@
 """
 Super-resolution of CelebA using Generative Adversarial Networks.
 
-The dataset can be downloaded from: https://www.dropbox.com/sh/8oqt9vytwxb3s4r/AADIKlz8PR9zr6Y20qbkunrba/Img/img_align_celeba.zip?dl=0
+The dataset can be downloaded from: https://www.dropbox.com/sh/8oqt9vytwxb3s4r/AADIKlz8PR9zr6Y20qbkunrba/Img
+/img_align_celeba.zip?dl=0
 
 Instrustion on running the script:
 1. Download the dataset from the provided link
@@ -9,15 +10,14 @@ Instrustion on running the script:
 4. Run the sript using command 'python srgan.py'
 """
 
-from tensorflow.keras.layers import Input, Dense, Reshape, Flatten, Dropout, Concatenate
-from tensorflow.keras.layers import BatchNormalization, Activation, ZeroPadding2D, Add
-from tensorflow.keras.layers import PReLU, LeakyReLU
+from tensorflow.keras.layers import Input, Dense
+from tensorflow.keras.layers import BatchNormalization, Activation, Add
+from tensorflow.keras.layers import LeakyReLU
 from tensorflow.keras.layers import UpSampling2D, Conv2D
 from tensorflow.keras.applications import VGG19
-from tensorflow.keras.models import Sequential, Model
+from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
-import datetime
 import matplotlib.pyplot as plt
 from data_loader import DataLoader
 import data_loader as dl
@@ -40,9 +40,10 @@ class SRGAN:
         # Number of residual blocks in the generator
         self.n_residual_blocks = 16
 
-        strategy = tf.distribute.MirroredStrategy()nb_gpu = self.strategy.num_replicas_in_sync
-        self.log.info("* Found {} GPU".format(nb_gpu))
-        #self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
+        self.strategy = tf.distribute.MirroredStrategy()
+        nb_gpu = self.strategy.num_replicas_in_sync
+        print("* Found {} GPU".format(nb_gpu))
+        # self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
 
         with self.strategy.scope():
             optimizer = Adam(0.0002, 0.5)
@@ -207,7 +208,7 @@ class SRGAN:
 
                     # Train the discriminators (original images = real / generated = Fake)
 
-                    #print(imgs_hr.shape, valid.shape)
+                    # print(imgs_hr.shape, valid.shape)
                     d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
                     d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
                     d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
@@ -219,7 +220,7 @@ class SRGAN:
                     # ------------------
 
                     # Sample images and their conditioning counterparts
-                    #imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
+                    # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
 
                     # The generators want the discriminators to label the generated images as real
                     valid = np.ones((batch_size,) + self.disc_patch)
@@ -229,7 +230,7 @@ class SRGAN:
 
                     # Train the generators
                     g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
-                    #print("Loss: ", g_loss)
+                    # print("Loss: ", g_loss)
                     pbar.set_description("Loss Generator: {}".format(g_loss))
                     disc_turn = True
 
