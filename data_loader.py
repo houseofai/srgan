@@ -33,7 +33,7 @@ class DataLoader:
                 img_lr = np.fliplr(img_lr)
 
             imgs_hr.append(img_hr)
-            imgs_lr.append0(img_lr)
+            imgs_lr.append(img_lr)
 
         imgs_hr = np.array(imgs_hr) / 127.5 - 1.
         imgs_lr = np.array(imgs_lr) / 127.5 - 1.
