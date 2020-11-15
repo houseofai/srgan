@@ -19,6 +19,8 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
 import matplotlib.pyplot as plt
+from tensorflow.python.data.experimental import AutoShardPolicy
+
 from data_loader import DataLoader
 import data_loader as dl
 import numpy as np
@@ -186,7 +188,16 @@ class SRGAN:
 
     def train(self, epochs, batch_size=1, sample_interval=50):
         self.sample_images(5)
+
+        options = tf.data.Options()
+        options.experimental_distribute.auto_shard_policy = AutoShardPolicy.OFF
+
         ds_hr, ds_lr = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
+
+        ds_hr = self.strategy.experimental_distribute_dataset(ds_hr.with_options(options))
+        ds_lr = self.strategy.experimental_distribute_dataset(ds_lr.with_options(options))
+
+        #ds_hr, ds_lr = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
 
         for epoch in trange(epochs):
             disc_turn = True

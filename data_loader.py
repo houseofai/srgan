@@ -41,13 +41,19 @@ class DataLoader:
         return imgs_hr, imgs_lr
 
 
+def normalize(image, label):
+    return image / 127.5 - 1., label
+
+
+def flip(image, label):
+    return tf.image.random_flip_left_right(image), label
+
+
 def get_data(hr_size, batch_size, data_dir="./data/"):
     low_h, low_w = int(hr_size[0] / 4), int(hr_size[0] / 4)
     normalization_layer = tf.keras.layers.experimental.preprocessing.Rescaling(1. / 127.5)
     print("Preprocessing data for HR{} and LR{}".format(hr_size, (low_h, low_w)))
-    ds = tf.keras.preprocessing.image_dataset_from_directory(data_dir, batch_size=batch_size) \
-        .map(lambda x, y: ((x / 127.5 - 1.), y)) \
-        .map(lambda x, y: (tf.image.random_flip_left_right(x), y))
+    ds = tf.keras.preprocessing.image_dataset_from_directory(data_dir, batch_size=batch_size).map(normalize).map(flip)
 
     AUTOTUNE = tf.data.experimental.AUTOTUNE
     ds_hr = ds.map(lambda x, y: (tf.image.resize(x, hr_size), y)).cache().prefetch(buffer_size=AUTOTUNE)
