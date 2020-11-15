@@ -16,13 +16,14 @@ from tensorflow.keras.layers import UpSampling2D, Conv2D
 from tensorflow.keras.applications import VGG19
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.optimizers import Adam
+import tensorflow as tf
 import datetime
 import matplotlib.pyplot as plt
 from data_loader import DataLoader
 import data_loader as dl
 import numpy as np
 import os
-from tqdm import trange
+from tqdm import trange, tqdm
 
 
 class SRGAN:
@@ -39,15 +40,20 @@ class SRGAN:
         # Number of residual blocks in the generator
         self.n_residual_blocks = 16
 
-        optimizer = Adam(0.0002, 0.5)
+        strategy = tf.distribute.MirroredStrategy()nb_gpu = self.strategy.num_replicas_in_sync
+        self.log.info("* Found {} GPU".format(nb_gpu))
+        #self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
 
-        # We use a pre-trained VGG19 model to extract image features from the high resolution
-        # and the generated high resolution images and minimize the mse between them
-        self.vgg = self.build_vgg()
-        self.vgg.trainable = False
-        self.vgg.compile(loss='mse',
-                         optimizer=optimizer,
-                         metrics=['accuracy'])
+        with self.strategy.scope():
+            optimizer = Adam(0.0002, 0.5)
+
+            # We use a pre-trained VGG19 model to extract image features from the high resolution
+            # and the generated high resolution images and minimize the mse between them
+            self.vgg = self.build_vgg()
+            self.vgg.trainable = False
+            self.vgg.compile(loss='mse',
+                             optimizer=optimizer,
+                             metrics=['accuracy'])
 
         # Configure data loader
         self.dataset_name = 'img_align_celeba'
@@ -62,35 +68,36 @@ class SRGAN:
         self.gf = 64
         self.df = 64
 
-        # Build and compile the discriminator
-        self.discriminator = self.build_discriminator()
-        self.discriminator.compile(loss='mse',
-                                   optimizer=optimizer,
-                                   metrics=['accuracy'])
+        with self.strategy.scope():
+            # Build and compile the discriminator
+            self.discriminator = self.build_discriminator()
+            self.discriminator.compile(loss='mse',
+                                       optimizer=optimizer,
+                                       metrics=['accuracy'])
 
-        # Build the generator
-        self.generator = self.build_generator()
+            # Build the generator
+            self.generator = self.build_generator()
 
-        # High res. and low res. images
-        img_hr = Input(shape=self.hr_shape)
-        img_lr = Input(shape=self.lr_shape)
+            # High res. and low res. images
+            img_hr = Input(shape=self.hr_shape)
+            img_lr = Input(shape=self.lr_shape)
 
-        # Generate high res. version from low res.
-        fake_hr = self.generator(img_lr)
+            # Generate high res. version from low res.
+            fake_hr = self.generator(img_lr)
 
-        # Extract image features of the generated img
-        fake_features = self.vgg(fake_hr)
+            # Extract image features of the generated img
+            fake_features = self.vgg(fake_hr)
 
-        # For the combined model we will only train the generator
-        self.discriminator.trainable = False
+            # For the combined model we will only train the generator
+            self.discriminator.trainable = False
 
-        # Discriminator determines validity of generated high res. images
-        validity = self.discriminator(fake_hr)
+            # Discriminator determines validity of generated high res. images
+            validity = self.discriminator(fake_hr)
 
-        self.combined = Model([img_lr, img_hr], [validity, fake_features])
-        self.combined.compile(loss=['binary_crossentropy', 'mse'],
-                              loss_weights=[1e-3, 1],
-                              optimizer=optimizer)
+            self.combined = Model([img_lr, img_hr], [validity, fake_features])
+            self.combined.compile(loss=['binary_crossentropy', 'mse'],
+                                  loss_weights=[1e-3, 1],
+                                  optimizer=optimizer)
 
     def build_vgg(self):
         """
@@ -182,7 +189,8 @@ class SRGAN:
 
         for epoch in trange(epochs):
             disc_turn = True
-            for (imgs_hr, y), (imgs_lr, y) in zip(ds_hr, ds_lr):
+            pbar = tqdm(zip(ds_hr, ds_lr))
+            for (imgs_hr, y), (imgs_lr, y) in pbar:
 
                 if disc_turn:
                     # ----------------------
@@ -191,6 +199,7 @@ class SRGAN:
                     # Sample images and their conditioning counterparts
                     # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
                     # From low res. image generate high res. version
+
                     fake_hr = self.generator.predict(imgs_lr)
 
                     valid = np.ones((batch_size,) + self.disc_patch)
@@ -202,6 +211,7 @@ class SRGAN:
                     d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
                     d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
                     d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+                    pbar.set_description("Loss Discriminator: {}".format(d_loss))
                     disc_turn = False
                 else:
                     # ------------------
@@ -220,11 +230,15 @@ class SRGAN:
                     # Train the generators
                     g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
                     #print("Loss: ", g_loss)
+                    pbar.set_description("Loss Generator: {}".format(g_loss))
                     disc_turn = True
 
             # If at save interval => save generated image samples
             if epoch % sample_interval == 0:
                 self.sample_images(epoch)
+                self.discriminator.save_weights("./checkpoints_disc")
+                self.generator.save_weights("./checkpoints_gen")
+                self.combined.save_weights("./checkpoints_comb")
 
     def sample_images(self, epoch):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
