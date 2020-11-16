@@ -41,22 +41,26 @@ class DataLoader:
         return imgs_hr, imgs_lr
 
 
-def normalize(image, label):
-    return image / 127.5 - 1., label
+def normalize(image):
+    return image / 127.5 - 1.
 
 
-def flip(image, label):
-    return tf.image.random_flip_left_right(image), label
+def flip(image):
+    return tf.image.random_flip_left_right(image)
 
 
-def get_data(hr_size, batch_size, data_dir="./data/"):
-    low_h, low_w = int(hr_size[0] / 4), int(hr_size[0] / 4)
-    normalization_layer = tf.keras.layers.experimental.preprocessing.Rescaling(1. / 127.5)
+def get_data(hr_size, batch_size, scale_down=4, data_dir="./data/"):
+    low_h, low_w = int(hr_size[0] / scale_down), int(hr_size[0] / scale_down)
+
     print("Preprocessing data for HR{} and LR{}".format(hr_size, (low_h, low_w)))
-    ds = tf.keras.preprocessing.image_dataset_from_directory(data_dir, batch_size=batch_size).map(normalize).map(flip)
+    ds = tf.keras.preprocessing.image_dataset_from_directory(data_dir, image_size=hr_size, label_mode=None,
+                                                             batch_size=batch_size)\
+        .map(normalize, num_parallel_calls=tf.data.experimental.AUTOTUNE)\
+        .map(flip, num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
     AUTOTUNE = tf.data.experimental.AUTOTUNE
-    ds_hr = ds.map(lambda x, y: (tf.image.resize(x, hr_size), y)).cache().prefetch(buffer_size=AUTOTUNE)
-    ds_lr = ds.map(lambda x, y: (tf.image.resize(x, (low_h, low_w)), y)).cache().prefetch(buffer_size=AUTOTUNE)
+    ds_hr = ds.prefetch(buffer_size=AUTOTUNE)
+    ds_lr = ds.map(lambda x: (tf.image.resize(x, (low_h, low_w))), num_parallel_calls=tf.data.experimental.AUTOTUNE)\
+        .prefetch(buffer_size=AUTOTUNE)
 
     return ds_hr, ds_lr

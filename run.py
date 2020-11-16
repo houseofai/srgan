@@ -186,15 +186,23 @@ class SRGAN:
 
         return Model(d0, validity)
 
-    def train(self, epochs, batch_size=1, sample_interval=50):
-        #self.sample_images(5)
+    def train(self, epochs, batch_size, sample_interval=50):
+
+        valid = np.ones((batch_size,) + self.disc_patch)
+        fake = np.zeros((batch_size,) + self.disc_patch)
+        valid = np.ones((batch_size,) + self.disc_patch)
+
+
+
         ds_hr, ds_lr = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
 
         for epoch in trange(epochs):
             disc_turn = True
             pbar = tqdm(zip(ds_hr, ds_lr))
-            for (imgs_hr, y), (imgs_lr, y) in pbar:
+            step = 0
 
+            for imgs_hr, imgs_lr in pbar:
+                tf.profiler.experimental.start('logs')
                 if disc_turn:
                     # ----------------------
                     #  Train Discriminator
@@ -205,8 +213,6 @@ class SRGAN:
 
                     fake_hr = self.generator.predict(imgs_lr)
 
-                    valid = np.ones((batch_size,) + self.disc_patch)
-                    fake = np.zeros((batch_size,) + self.disc_patch)
 
                     # Train the discriminators (original images = real / generated = Fake)
 
@@ -214,6 +220,7 @@ class SRGAN:
                     d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
                     d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
                     d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
+
                     pbar.set_description("Loss Discriminator: {}".format(d_loss))
                     disc_turn = False
                 else:
@@ -225,7 +232,6 @@ class SRGAN:
                     # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
 
                     # The generators want the discriminators to label the generated images as real
-                    valid = np.ones((batch_size,) + self.disc_patch)
 
                     # Extract ground truth image features using pre-trained VGG19 model
                     image_features = self.vgg.predict(imgs_hr)
@@ -235,13 +241,16 @@ class SRGAN:
                     # print("Loss: ", g_loss)
                     pbar.set_description("Loss Generator: {}".format(g_loss))
                     disc_turn = True
-
+                step += 1
+                tf.profiler.experimental.stop()
             # If at save interval => save generated image samples
-            #if epoch % sample_interval == 0:
-            self.sample_images(epoch)
+                if epoch % sample_interval == 0:
+                    self.sample_images(epoch)
+
             self.discriminator.save_weights("./checkpoints_disc")
             self.generator.save_weights("./checkpoints_gen")
             self.combined.save_weights("./checkpoints_comb")
+
 
     def sample_images(self, epoch):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
@@ -283,5 +292,12 @@ class SRGAN:
 
 
 if __name__ == '__main__':
+    gpus = tf.config.experimental.list_physical_devices('GPU')
+    if gpus:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+
+    batch_size = 16
+    print("Batch Size:", batch_size)
     gan = SRGAN()
-    gan.train(epochs=3000, batch_size=16, sample_interval=100)
+    gan.train(epochs=3000, batch_size=batch_size, sample_interval=100)
