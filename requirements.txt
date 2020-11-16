@@ -3,3 +3,4 @@ matplotlib~=3.3.3
 pillow~=8.0.1
 tqdm~=4.51.0
 numpy~=1.18.5
+tensorboard-plugin-profile==2.3.0
