@@ -14,12 +14,12 @@ from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras.layers import BatchNormalization, Activation, Add
 from tensorflow.keras.layers import LeakyReLU
 from tensorflow.keras.layers import UpSampling2D, Conv2D
-from tensorflow.keras.applications import VGG19
+from tensorflow.keras.applications import VGG19, EfficientNetB7
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from tensorflow.python.data.experimental import AutoShardPolicy
+from helpers import LogEvents as lev
 
 from data_loader import DataLoader
 import data_loader as dl
@@ -29,34 +29,37 @@ from tqdm import trange, tqdm
 
 
 class SRGAN:
-    def __init__(self):
+    def __init__(self, profile):
         # Input shape
         self.channels = 3
+        self.scale = 4
         self.lr_height = 64  # Low resolution height
         self.lr_width = 64  # Low resolution width
         self.lr_shape = (self.lr_height, self.lr_width, self.channels)
-        self.hr_height = self.lr_height * 4  # High resolution height
-        self.hr_width = self.lr_width * 4  # High resolution width
+        self.hr_height = self.lr_height * self.scale  # High resolution height
+        self.hr_width = self.lr_width * self.scale  # High resolution width
         self.hr_shape = (self.hr_height, self.hr_width, self.channels)
+        self.profile = profile
+        self.log_dir = "./logs"
 
         # Number of residual blocks in the generator
         self.n_residual_blocks = 16
 
-        self.strategy = tf.distribute.MirroredStrategy()
-        nb_gpu = self.strategy.num_replicas_in_sync
-        print("* Found {} GPU".format(nb_gpu))
+#        self.strategy = tf.distribute.MirroredStrategy()
+#        nb_gpu = self.strategy.num_replicas_in_sync
+#        print("* Found {} GPU".format(nb_gpu))
         # self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
 
-        with self.strategy.scope():
-            optimizer = Adam(0.0002, 0.5)
+        # with self.strategy.scope():
+        optimizer = Adam(0.0002, 0.5)
 
-            # We use a pre-trained VGG19 model to extract image features from the high resolution
-            # and the generated high resolution images and minimize the mse between them
-            self.vgg = self.build_vgg()
-            self.vgg.trainable = False
-            self.vgg.compile(loss='mse',
-                             optimizer=optimizer,
-                             metrics=['accuracy'])
+        # We use a pre-trained VGG19 model to extract image features from the high resolution
+        # and the generated high resolution images and minimize the mse between them
+        self.vgg = self.build_feature_extractor()
+        self.vgg.trainable = False
+        self.vgg.compile(loss='mse',
+                         optimizer=optimizer,
+                         metrics=['accuracy'])
 
         # Configure data loader
         self.dataset_name = 'img_align_celeba'
@@ -71,47 +74,57 @@ class SRGAN:
         self.gf = 64
         self.df = 64
 
-        with self.strategy.scope():
-            # Build and compile the discriminator
-            self.discriminator = self.build_discriminator()
-            self.discriminator.compile(loss='mse',
-                                       optimizer=optimizer,
-                                       metrics=['accuracy'])
+        # with self.strategy.scope():
+        # Build and compile the discriminator
+        self.discriminator = self.build_discriminator()
+        self.discriminator.compile(loss='mse',
+                                   optimizer=optimizer,
+                                   metrics=['accuracy'])
 
-            # Build the generator
-            self.generator = self.build_generator()
+        # Build the generator
+        self.generator = self.build_generator()
 
-            # High res. and low res. images
-            img_hr = Input(shape=self.hr_shape)
-            img_lr = Input(shape=self.lr_shape)
+        # High res. and low res. images
+        img_hr = Input(shape=self.hr_shape)
+        img_lr = Input(shape=self.lr_shape)
 
-            # Generate high res. version from low res.
-            fake_hr = self.generator(img_lr)
+        # Generate high res. version from low res.
+        fake_hr = self.generator(img_lr)
 
-            # Extract image features of the generated img
-            fake_features = self.vgg(fake_hr)
+        # Extract image features of the generated img
+        fake_features = self.vgg(fake_hr)
 
-            # For the combined model we will only train the generator
-            self.discriminator.trainable = False
+        # For the combined model we will only train the generator
+        self.discriminator.trainable = False
 
-            # Discriminator determines validity of generated high res. images
-            validity = self.discriminator(fake_hr)
+        # Discriminator determines validity of generated high res. images
+        validity = self.discriminator(fake_hr)
 
-            self.combined = Model([img_lr, img_hr], [validity, fake_features])
-            self.combined.compile(loss=['binary_crossentropy', 'mse'],
-                                  loss_weights=[1e-3, 1],
-                                  optimizer=optimizer)
+        self.combined = Model([img_lr, img_hr], [validity, fake_features])
+        self.combined.compile(loss=['binary_crossentropy', 'mse'],
+                              loss_weights=[1e-3, 1],
+                              optimizer=optimizer)
 
-    def build_vgg(self):
+    def build_feature_extractor(self):
         """
-        Builds a pre-trained VGG19 model that outputs image features extracted at the
+        Builds a pre-trained Feature Extractor model that outputs image features extracted at the
         third block of the model
         """
-        vgg = VGG19(weights="imagenet", input_shape=self.hr_shape, include_top=False)
-        # Set outputs to outputs of last conv. layer in block 3
-        # See architecture at: https://github.com/keras-team/keras/blob/master/keras/applications/vgg19.py
+        extractor = EfficientNetB7(weights="imagenet", input_shape=self.hr_shape, include_top=False)
+        # extractor = VGG19(weights="imagenet", input_shape=self.hr_shape, include_top=False)
 
-        return Model(inputs=vgg.input, outputs=vgg.layers[9].output)
+        # Tried:
+        # - no change: no shape
+        # - block6m_add: shapes in only yellow and red
+        # - block5j_add: shapes and blue
+        # - block5j_project_conv: blue
+        # - block4j_add: Less shapes but colorful
+        # - block2g_add: BEST but yellow
+        # - block2g_project_conv:
+        # - block1d_add: No shape - no color
+        output_layer = extractor.get_layer("block2f_add")
+
+        return Model(inputs=extractor.input, outputs=output_layer.output)
 
     def build_generator(self):
 
@@ -188,49 +201,52 @@ class SRGAN:
 
     def train(self, epochs, batch_size, sample_interval=50):
 
-        valid = np.ones((batch_size,) + self.disc_patch)
         fake = np.zeros((batch_size,) + self.disc_patch)
-        valid = np.ones((batch_size,) + self.disc_patch)
 
+        #options = tf.data.Options()
+        #options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
 
+        ds = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
+        ds_size = tf.data.experimental.cardinality(ds)
+        #ds_hr = ds_hr.with_options(options)
+        #ds_lr = ds_lr.with_options(options)
 
-        ds_hr, ds_lr = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
+        # ds_hr = self.strategy.experimental_distribute_dataset(ds_hr)
+        # ds_lr = self.strategy.experimental_distribute_dataset(ds_lr)
+        print("Total iteration per epochs: {}".format(ds_size))
+
+        train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
+        logevents = lev.LogEvents(log_dir=self.log_dir)
 
         for epoch in trange(epochs):
             disc_turn = True
-            pbar = tqdm(zip(ds_hr, ds_lr))
-            step = 0
+            pbar = tqdm(total=ds_size.numpy())
 
-            for imgs_hr, imgs_lr in pbar:
-                tf.profiler.experimental.start('logs')
+            step = 0
+            if self.profile:
+                tf.profiler.experimental.start(self.log_dir)
+            g_loss = None
+            for imgs_hr in ds:
+
+                imgs_lr = tf.image.resize(imgs_hr, (self.lr_height, self.lr_width))
+                # Create valid images based on current batch size to avoid remainder batch error
+                valid = np.ones((imgs_hr.shape[0],) + self.disc_patch)
                 if disc_turn:
                     # ----------------------
                     #  Train Discriminator
                     # ----------------------
-                    # Sample images and their conditioning counterparts
-                    # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
-                    # From low res. image generate high res. version
-
                     fake_hr = self.generator.predict(imgs_lr)
 
-
                     # Train the discriminators (original images = real / generated = Fake)
-
-                    # print(imgs_hr.shape, valid.shape)
                     d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
                     d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
-                    d_loss = 0.5 * np.add(d_loss_real, d_loss_fake)
-
-                    pbar.set_description("Loss Discriminator: {}".format(d_loss))
+                    #d_loss, accuracy = 0.5 * np.add(d_loss_real, d_loss_fake)
+                    # pbar.set_description("Loss Discriminator: {}".format(d_loss))
                     disc_turn = False
                 else:
                     # ------------------
                     #  Train Generator
                     # ------------------
-
-                    # Sample images and their conditioning counterparts
-                    # imgs_hr, imgs_lr = self.data_loader.load_data(batch_size)
-
                     # The generators want the discriminators to label the generated images as real
 
                     # Extract ground truth image features using pre-trained VGG19 model
@@ -239,22 +255,26 @@ class SRGAN:
                     # Train the generators
                     g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
                     # print("Loss: ", g_loss)
-                    pbar.set_description("Loss Generator: {}".format(g_loss))
+                    train_loss.update_state(g_loss)
+                    logevents.log_train(step, train_loss.result())
                     disc_turn = True
+                pbar.set_description("[Step {}/{}] Loss Generator: {}".format(step, ds_size, g_loss))
+                pbar.update(1)
                 step += 1
+                # If at save interval => save generated image samples
+                if step % sample_interval == 0:
+                    self.sample_images(epoch, step)
+            if self.profile:
                 tf.profiler.experimental.stop()
-            # If at save interval => save generated image samples
-                if epoch % sample_interval == 0:
-                    self.sample_images(epoch)
-
+            self.sample_images(epoch, step)
             self.discriminator.save_weights("./checkpoints_disc")
             self.generator.save_weights("./checkpoints_gen")
             self.combined.save_weights("./checkpoints_comb")
+            pbar.close()
+            #logevents.reset(train_loss)
 
-
-    def sample_images(self, epoch):
+    def sample_images(self, epoch, step):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
-        r, c = 2, 2
 
         imgs_hr, imgs_lr = self.data_loader.load_data(batch_size=2, is_testing=True)
         fake_hr = self.generator.predict(imgs_lr)
@@ -265,30 +285,26 @@ class SRGAN:
         imgs_hr = 0.5 * imgs_hr + 0.5
 
         # Save generated images and the high resolution originals
-        titles = ['Generated', 'Original']
+        titles = ['LR', 'HR', 'Generated']
+        r, c = 2, 3
         fig, axs = plt.subplots(r, c)
         cnt = 0
         for row in range(r):
-            for col, image in enumerate([fake_hr, imgs_hr]):
+            for col, image in enumerate([imgs_lr, imgs_hr, fake_hr]):
                 axs[row, col].imshow(image[row])
                 axs[row, col].set_title(titles[col])
                 axs[row, col].axis('off')
             cnt += 1
-        fig.savefig("images/%s/%d.png" % (self.dataset_name, epoch))
+        fig.savefig("images/%s/epoch-%d_step-%d.png" % (self.dataset_name, epoch, step))
         plt.close()
 
         # Save low resolution images for comparison
-        for i in range(r):
-            fig = plt.figure()
-            plt.imshow(imgs_lr[i])
-            fig.savefig('images/%s/%d_lowres%d.png' % (self.dataset_name, epoch, i))
-            plt.close()
+        #for i in range(r):
+        #    fig = plt.figure()
+        #    plt.imshow(imgs_lr[i])
+        #    fig.savefig('images/%s/%d_lowres%d.png' % (self.dataset_name, epoch, i))
+        #    plt.close()
 
-    def save_img(self, img, epoch):
-        fig = plt.figure()
-        plt.imshow(img)
-        fig.savefig('images/%s/%d_lowres%d.png' % (self.dataset_name, epoch, 0))
-        plt.close()
 
 
 if __name__ == '__main__':
@@ -297,7 +313,7 @@ if __name__ == '__main__':
         for gpu in gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
 
-    batch_size = 16
+    batch_size = 32
     print("Batch Size:", batch_size)
-    gan = SRGAN()
-    gan.train(epochs=3000, batch_size=batch_size, sample_interval=100)
+    gan = SRGAN(profile=False)
+    gan.train(epochs=3000, batch_size=batch_size, sample_interval=50)
