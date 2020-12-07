@@ -11,6 +11,7 @@ Instrustion on running the script:
 """
 
 import os
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import tensorflow as tf
@@ -53,21 +54,25 @@ class SRGAN:
         # Number of residual blocks in the generator
         self.n_residual_blocks = config.model.n_residual_blocks
 
-        # self.strategy = tf.distribute.MirroredStrategy()
-        # nb_gpu = self.strategy.num_replicas_in_sync
-        # print("* Found {} GPU".format(nb_gpu))
-        # self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
+        if config.training.multigpu:
+            self.strategy = tf.distribute.MirroredStrategy()
+            nb_gpu = self.strategy.num_replicas_in_sync
+            print("* Found {} GPU".format(nb_gpu))
+            self.batch_size = self.batch_size * self.strategy.num_replicas_in_sync
+            print("* New batch size: {}".format(self.batch_size))
+        else:
+            self.strategy = None
 
-        # with self.strategy.scope():
-        optimizer = Adam(config.optimizer.learning_rate, config.optimizer.momentum)
+        with helpers.get_strategy_scope(self.strategy, config.training.multigpu):
+            optimizer = Adam(config.optimizer.learning_rate, config.optimizer.momentum)
 
         # We use a pre-trained VGG19 model to extract image features from the high resolution
         # and the generated high resolution images and minimize the mse between them
-        self.extractor = self.build_feature_extractor()
-        self.extractor.trainable = False
-        self.extractor.compile(loss='mse',
-                               optimizer=optimizer,
-                               metrics=['accuracy'])
+            self.extractor = self.build_feature_extractor()
+            self.extractor.trainable = False
+            self.extractor.compile(loss='mse',
+                                   optimizer=optimizer,
+                                   metrics=['accuracy'])
 
         # Configure data loader
         self.data_dir = config.data.base_dir
@@ -84,39 +89,39 @@ class SRGAN:
         self.gf = config.model.filters
         self.df = config.model.filters
 
-        # with self.strategy.scope():
-        # Build and compile the discriminator
-        self.discriminator = self.build_discriminator()
-        self.discriminator.compile(loss='mse',
-                                   optimizer=optimizer,
-                                   metrics=['accuracy'])
-        self.ckpt_dics = helpers.CheckpointManager(self.discriminator, optimizer, "discriminator", self.ckpt_dir)
+        with helpers.get_strategy_scope(self.strategy, config.training.multigpu):
+            # Build and compile the discriminator
+            self.discriminator = self.build_discriminator()
+            self.discriminator.compile(loss='mse',
+                                       optimizer=optimizer,
+                                       metrics=['accuracy'])
+            self.ckpt_disc = helpers.CheckpointManager(self.discriminator, optimizer, "discriminator", self.ckpt_dir)
 
-        # Build the generator
-        self.generator = self.build_generator()
+            # Build the generator
+            self.generator = self.build_generator()
 
-        # High res. and low res. images
-        img_hr = Input(shape=self.hr_shape)
-        img_lr = Input(shape=self.lr_shape)
+            # High res. and low res. images
+            img_hr = Input(shape=self.hr_shape)
+            img_lr = Input(shape=self.lr_shape)
 
-        # Generate high res. version from low res.
-        fake_hr = self.generator(img_lr)
-        self.ckpt_generator = helpers.CheckpointManager(self.generator, optimizer, "generator", self.ckpt_dir)
+            # Generate high res. version from low res.
+            fake_hr = self.generator(img_lr)
+            self.ckpt_generator = helpers.CheckpointManager(self.generator, optimizer, "generator", self.ckpt_dir)
 
-        # Extract image features of the generated img
-        fake_features = self.extractor(fake_hr)
+            # Extract image features of the generated img
+            fake_features = self.extractor(fake_hr)
 
-        # For the combined model we will only train the generator
-        self.discriminator.trainable = False
+            # For the combined model we will only train the generator
+            self.discriminator.trainable = False
 
-        # Discriminator determines validity of generated high res. images
-        validity = self.discriminator(fake_hr)
+            # Discriminator determines validity of generated high res. images
+            validity = self.discriminator(fake_hr)
 
-        self.combined = Model([img_lr, img_hr], [validity, fake_features])
-        self.combined.compile(loss=['binary_crossentropy', 'mse'],
-                              loss_weights=[1e-3, 1],
-                              optimizer=optimizer)
-        self.ckpt_combined = helpers.CheckpointManager(self.combined, optimizer, "combined", self.ckpt_dir)
+            self.combined = Model([img_lr, img_hr], [validity, fake_features])
+            self.combined.compile(loss=['binary_crossentropy', 'mse'],
+                                  loss_weights=[1e-3, 1],
+                                  optimizer=optimizer)
+            self.ckpt_combined = helpers.CheckpointManager(self.combined, optimizer, "combined", self.ckpt_dir)
 
     def build_feature_extractor(self):
         """
@@ -278,7 +283,7 @@ class SRGAN:
                 tf.profiler.experimental.stop()
             self.sample_images(epoch, step)
 
-            self.ckpt_dics.save(train_loss.result())
+            self.ckpt_disc.save(train_loss.result())
             self.ckpt_generator.save(train_loss.result())
             self.ckpt_combined.save(train_loss.result())
 
@@ -333,14 +338,14 @@ if __name__ == '__main__':
     if args.mode == "predict":
         if args.image is not None:
             # TODO
-            #predict(config, args.image)
+            # predict(config, args.image)
             pass
         else:
             ValueError("'image' argument needs to be specified")
     elif args.mode == "train":
         # Default mode
 
-        experimentation_name = "{}-res_block{}_batch{}_lr20-5_filters{}"\
+        experimentation_name = "{}-res_block{}_batch{}_lr20-4_filters{}" \
             .format(args.conf, config.model.n_residual_blocks, config.training.batch_size, config.model.filters)
         gan = SRGAN(config)
         gan.train(epochs=3000, sample_interval=500)

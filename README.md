@@ -1,6 +1,10 @@
-# SRGANs: Using SRGANs to Generate Photo-Realistic Images
+# SRGAN: Photo-Realistic Single Image Super-Resolution Using a Generative Adversarial Network
 Keras implementation of "Photo-Realistic Single Image Super-Resolution Using a Generative Adversarial Network"
 ___
+
+The current project is used for training only. No prediction method has been defined.
+
+
 
 ### 1. Set up the environment
 
@@ -54,4 +58,5 @@ python3 run.py
 ```
 
 Checkpoints will be store in the checkpoints' folder
-Intermediate generated images will be stored in images folder
+
+Intermediate generated images will be stored in the images folder

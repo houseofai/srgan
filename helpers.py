@@ -9,6 +9,7 @@ import boto3
 from munch import munchify
 import yaml
 import logging
+from contextlib import nullcontext
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -174,3 +175,8 @@ def memory_growth():
             tf.config.experimental.set_memory_growth(gpu, True)
 
 
+def get_strategy_scope(strategy, use=True):
+    ctx = nullcontext()
+    if use:
+        ctx = strategy.scope()
+    return ctx
