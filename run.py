@@ -20,6 +20,7 @@ from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
 import matplotlib.pyplot as plt
 from helpers import LogEvents as lev
+from helpers import CheckpointManager as cm
 
 from data_loader import DataLoader
 import data_loader as dl
@@ -29,7 +30,7 @@ from tqdm import trange, tqdm
 
 
 class SRGAN:
-    def __init__(self, profile):
+    def __init__(self, profile, batch_size):
         # Input shape
         self.channels = 3
         self.scale = 4
@@ -41,29 +42,34 @@ class SRGAN:
         self.hr_shape = (self.hr_height, self.hr_width, self.channels)
         self.profile = profile
         self.log_dir = "./logs"
+        self.batch_size = batch_size
+
+        self.ckpt_dir = "checkpoints"
+        self.ckpt_max_to_keep = 3
 
         # Number of residual blocks in the generator
         self.n_residual_blocks = 16
 
-#        self.strategy = tf.distribute.MirroredStrategy()
-#        nb_gpu = self.strategy.num_replicas_in_sync
-#        print("* Found {} GPU".format(nb_gpu))
-        # self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
+        #self.strategy = tf.distribute.MirroredStrategy()
+        #nb_gpu = self.strategy.num_replicas_in_sync
+        #print("* Found {} GPU".format(nb_gpu))
+        #self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
 
-        # with self.strategy.scope():
+        #with self.strategy.scope():
         optimizer = Adam(0.0002, 0.5)
 
         # We use a pre-trained VGG19 model to extract image features from the high resolution
         # and the generated high resolution images and minimize the mse between them
-        self.vgg = self.build_feature_extractor()
-        self.vgg.trainable = False
-        self.vgg.compile(loss='mse',
+        self.extractor = self.build_feature_extractor()
+        self.extractor.trainable = False
+        self.extractor.compile(loss='mse',
                          optimizer=optimizer,
                          metrics=['accuracy'])
 
         # Configure data loader
-        self.dataset_name = 'img_align_celeba'
-        self.data_loader = DataLoader(dataset_name=self.dataset_name,
+        #self.dataset_name = './data/img_align_celeba'
+        self.dataset_name = '../coco/'
+        self.data_loader = DataLoader(dataset_name="{}train2017/".format(self.dataset_name),
                                       img_res=(self.hr_height, self.hr_width))
 
         # Calculate output shape of D (PatchGAN)
@@ -74,12 +80,13 @@ class SRGAN:
         self.gf = 64
         self.df = 64
 
-        # with self.strategy.scope():
+        #with self.strategy.scope():
         # Build and compile the discriminator
         self.discriminator = self.build_discriminator()
         self.discriminator.compile(loss='mse',
                                    optimizer=optimizer,
                                    metrics=['accuracy'])
+        self.ckpt_dics = cm.CheckpointManager(self.discriminator, optimizer, self.ckpt_dir, "discriminator", self.ckpt_max_to_keep)
 
         # Build the generator
         self.generator = self.build_generator()
@@ -90,9 +97,11 @@ class SRGAN:
 
         # Generate high res. version from low res.
         fake_hr = self.generator(img_lr)
+        self.ckpt_generator = cm.CheckpointManager(self.generator, optimizer, self.ckpt_dir, "generator",
+                                                        self.ckpt_max_to_keep)
 
         # Extract image features of the generated img
-        fake_features = self.vgg(fake_hr)
+        fake_features = self.extractor(fake_hr)
 
         # For the combined model we will only train the generator
         self.discriminator.trainable = False
@@ -104,15 +113,14 @@ class SRGAN:
         self.combined.compile(loss=['binary_crossentropy', 'mse'],
                               loss_weights=[1e-3, 1],
                               optimizer=optimizer)
+        self.ckpt_combined = cm.CheckpointManager(self.combined, optimizer, self.ckpt_dir, "combined", self.ckpt_max_to_keep)
 
     def build_feature_extractor(self):
         """
         Builds a pre-trained Feature Extractor model that outputs image features extracted at the
         third block of the model
         """
-        extractor = EfficientNetB7(weights="imagenet", input_shape=self.hr_shape, include_top=False)
-        # extractor = VGG19(weights="imagenet", input_shape=self.hr_shape, include_top=False)
-
+        #extractor = EfficientNetB7(weights="imagenet", input_shape=self.hr_shape, include_top=False)
         # Tried:
         # - no change: no shape
         # - block6m_add: shapes in only yellow and red
@@ -121,8 +129,14 @@ class SRGAN:
         # - block4j_add: Less shapes but colorful
         # - block2g_add: BEST but yellow
         # - block2g_project_conv:
+        # - block2f_add: lightly yellow
         # - block1d_add: No shape - no color
-        output_layer = extractor.get_layer("block2f_add")
+        # - block3b_add: Yellow, and noise
+        # - block3b_drop: blue
+        #output_layer = extractor.get_layer("block4b_add")
+
+        extractor = VGG19(weights="imagenet", input_shape=self.hr_shape, include_top=False)
+        output_layer = extractor.layers[9]
 
         return Model(inputs=extractor.input, outputs=output_layer.output)
 
@@ -199,14 +213,13 @@ class SRGAN:
 
         return Model(d0, validity)
 
-    def train(self, epochs, batch_size, sample_interval=50):
+    def train(self, epochs, sample_interval=50):
 
-        fake = np.zeros((batch_size,) + self.disc_patch)
 
         #options = tf.data.Options()
         #options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
 
-        ds = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size)
+        ds = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size, data_dir=self.dataset_name)
         ds_size = tf.data.experimental.cardinality(ds)
         #ds_hr = ds_hr.with_options(options)
         #ds_lr = ds_lr.with_options(options)
@@ -231,6 +244,7 @@ class SRGAN:
                 imgs_lr = tf.image.resize(imgs_hr, (self.lr_height, self.lr_width))
                 # Create valid images based on current batch size to avoid remainder batch error
                 valid = np.ones((imgs_hr.shape[0],) + self.disc_patch)
+                fake = np.zeros((imgs_hr.shape[0],) + self.disc_patch)
                 if disc_turn:
                     # ----------------------
                     #  Train Discriminator
@@ -250,7 +264,7 @@ class SRGAN:
                     # The generators want the discriminators to label the generated images as real
 
                     # Extract ground truth image features using pre-trained VGG19 model
-                    image_features = self.vgg.predict(imgs_hr)
+                    image_features = self.extractor.predict(imgs_hr)
 
                     # Train the generators
                     g_loss = self.combined.train_on_batch([imgs_lr, imgs_hr], [valid, image_features])
@@ -267,9 +281,14 @@ class SRGAN:
             if self.profile:
                 tf.profiler.experimental.stop()
             self.sample_images(epoch, step)
-            self.discriminator.save_weights("./checkpoints_disc")
-            self.generator.save_weights("./checkpoints_gen")
-            self.combined.save_weights("./checkpoints_comb")
+            #self.discriminator.save_weights("./checkpoints_disc")
+            #self.generator.save_weights("./checkpoints_gen")
+            #self.combined.save_weights("./checkpoints_comb")
+
+            self.ckpt_dics.save(train_loss.result())
+            self.ckpt_generator.save(train_loss.result())
+            self.ckpt_combined.save(train_loss.result())
+
             pbar.close()
             #logevents.reset(train_loss)
 
@@ -315,5 +334,5 @@ if __name__ == '__main__':
 
     batch_size = 32
     print("Batch Size:", batch_size)
-    gan = SRGAN(profile=False)
-    gan.train(epochs=3000, batch_size=batch_size, sample_interval=50)
+    gan = SRGAN(profile=False, batch_size=batch_size)
+    gan.train(epochs=3000, sample_interval=50)
