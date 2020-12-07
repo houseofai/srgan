@@ -10,9 +10,9 @@ class DataLoader:
         self.img_res = img_res + (3,)
 
     def load_data(self, batch_size=1, is_testing=False):
-        data_type = "train" if not is_testing else "test"
-
-        path = glob('%s/*' % self.dataset_name)
+        # data_type = "train" if not is_testing else "test"
+        img_path = '%s/*' % self.dataset_name
+        path = glob(img_path)
 
         batch_images = np.random.choice(path, size=batch_size)
 
@@ -52,7 +52,7 @@ def flip(image):
 def get_data(hr_size, batch_size, data_dir="./data/"):
     # low_h, low_w = int(hr_size[0] / scale_down), int(hr_size[0] / scale_down)
 
-    print("Preprocessing data for HR{}".format(hr_size))
+    print("Preprocessing data for HR{} from {}".format(hr_size, data_dir))
     AUTOTUNE = tf.data.experimental.AUTOTUNE
     ds = tf.keras.preprocessing.image_dataset_from_directory(data_dir, image_size=hr_size, label_mode=None,
                                                              batch_size=batch_size) \
