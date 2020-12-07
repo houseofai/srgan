@@ -1,0 +1,27 @@
+training:
+  epochs: 15
+  batch_size: 32
+  scale: 4
+  low_res: 64
+
+optimizer:
+  learning_rate: 0.00002
+  momentum: 0.5
+
+model:
+  n_residual_blocks: 64
+  filters: 32
+
+data:
+  base_dir: "/home/begood/git/datasets"
+  dataset: "coco" # "celeba"
+  datasubset: "train2017" # "img_align_celeba"
+
+checkpoint:
+  name: "alexnet"
+  dir: "checkpoints"
+  max_to_keep: 3
+
+tensorboard:
+  dir: logs
+  profile: False
