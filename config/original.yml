@@ -9,8 +9,8 @@ optimizer:
   momentum: 0.5
 
 model:
-  n_residual_blocks: 64
-  filters: 32
+  n_residual_blocks: 16
+  filters: 64
 
 data:
   base_dir: "/home/begood/git/datasets"
@@ -18,7 +18,6 @@ data:
   datasubset: "train2017" # "img_align_celeba"
 
 checkpoint:
-  name: "alexnet"
   dir: "checkpoints"
   max_to_keep: 3
 

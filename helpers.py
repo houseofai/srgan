@@ -174,7 +174,3 @@ def memory_growth():
             tf.config.experimental.set_memory_growth(gpu, True)
 
 
-####
-def quiet_tf():
-    print("Disable TF verbose logs")
-    tf.get_logger().setLevel('INFO')

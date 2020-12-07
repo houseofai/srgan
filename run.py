@@ -10,7 +10,10 @@ Instrustion on running the script:
 4. Run the sript using command 'python srgan.py'
 """
 
-import logging
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+import tensorflow as tf
 from tensorflow.keras.layers import Input, Dense
 from tensorflow.keras.layers import BatchNormalization, Add
 from tensorflow.keras.layers import LeakyReLU, PReLU
@@ -18,15 +21,14 @@ from tensorflow.keras.layers import UpSampling2D, Conv2D
 from tensorflow.keras.applications import VGG19  # , EfficientNetB7
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
-import tensorflow as tf
 import matplotlib.pyplot as plt
-import helpers
 import argparse
 
+import helpers
+import logging
 from data_loader import DataLoader
 import data_loader as dl
 import numpy as np
-import os
 from tqdm import trange, tqdm
 
 
@@ -312,8 +314,6 @@ if __name__ == '__main__':
     """
     Start of the program to train/predict/evaluate
     """
-    # Disable TF verbose logs
-    helpers.quiet_tf()
 
     logging.basicConfig(level=logging.INFO)
     log = logging.getLogger(__name__)
@@ -340,7 +340,7 @@ if __name__ == '__main__':
     elif args.mode == "train":
         # Default mode
 
-        experimentation_name = "res_block{}_batch{}_lr20-5_filters{}"\
-            .format(config.model.n_residual_blocks, config.training.batch_size, config.model.filters)
+        experimentation_name = "{}-res_block{}_batch{}_lr20-5_filters{}"\
+            .format(args.conf, config.model.n_residual_blocks, config.training.batch_size, config.model.filters)
         gan = SRGAN(config)
         gan.train(epochs=3000, sample_interval=500)
