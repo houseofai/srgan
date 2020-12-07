@@ -50,7 +50,6 @@ def flip(image):
 
 
 def get_data(hr_size, batch_size, data_dir="./data/"):
-    # low_h, low_w = int(hr_size[0] / scale_down), int(hr_size[0] / scale_down)
 
     print("Preprocessing data for HR{} from {}".format(hr_size, data_dir))
     AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -59,8 +58,6 @@ def get_data(hr_size, batch_size, data_dir="./data/"):
         .map(normalize, num_parallel_calls=tf.data.experimental.AUTOTUNE) \
         .map(flip, num_parallel_calls=tf.data.experimental.AUTOTUNE) \
         .prefetch(buffer_size=AUTOTUNE)
-    # ds_hr = ds
-    # ds_lr = ds.map(lambda x: (tf.image.resize(x, (low_h, low_w))), num_parallel_calls=tf.data.experimental.AUTOTUNE)\
-    #    .prefetch(buffer_size=AUTOTUNE)
 
-    return ds  # , ds_lr
+    return ds
+
