@@ -10,17 +10,18 @@ Instrustion on running the script:
 4. Run the sript using command 'python srgan.py'
 """
 
+import logging
 from tensorflow.keras.layers import Input, Dense
-from tensorflow.keras.layers import BatchNormalization, Activation, Add
-from tensorflow.keras.layers import LeakyReLU
+from tensorflow.keras.layers import BatchNormalization, Add
+from tensorflow.keras.layers import LeakyReLU, PReLU
 from tensorflow.keras.layers import UpSampling2D, Conv2D
-from tensorflow.keras.applications import VGG19, EfficientNetB7
+from tensorflow.keras.applications import VGG19  # , EfficientNetB7
 from tensorflow.keras.models import Model
 from tensorflow.keras.optimizers import Adam
 import tensorflow as tf
 import matplotlib.pyplot as plt
-from helpers import LogEvents as lev
-from helpers import CheckpointManager as cm
+import helpers
+import argparse
 
 from data_loader import DataLoader
 import data_loader as dl
@@ -30,46 +31,47 @@ from tqdm import trange, tqdm
 
 
 class SRGAN:
-    def __init__(self, profile, batch_size):
+    def __init__(self, config):
         # Input shape
         self.channels = 3
-        self.scale = 4
-        self.lr_height = 64  # Low resolution height
-        self.lr_width = 64  # Low resolution width
+        self.scale = config.training.scale
+        self.lr_height = config.training.low_res  # Low resolution height
+        self.lr_width = config.training.low_res  # Low resolution width
         self.lr_shape = (self.lr_height, self.lr_width, self.channels)
         self.hr_height = self.lr_height * self.scale  # High resolution height
         self.hr_width = self.lr_width * self.scale  # High resolution width
         self.hr_shape = (self.hr_height, self.hr_width, self.channels)
-        self.profile = profile
-        self.log_dir = "./logs"
-        self.batch_size = batch_size
-
-        self.ckpt_dir = "checkpoints"
-        self.ckpt_max_to_keep = 3
+        self.profile = config.tensorboard.profile
+        self.log_dir = config.tensorboard.dir
+        self.batch_size = config.training.batch_size
+        self.experimentation_name = experimentation_name
+        self.ckpt_dir = "{}/{}".format(config.checkpoint.dir, experimentation_name)
+        self.ckpt_max_to_keep = config.checkpoint.max_to_keep
 
         # Number of residual blocks in the generator
-        self.n_residual_blocks = 16
+        self.n_residual_blocks = config.model.n_residual_blocks
 
-        #self.strategy = tf.distribute.MirroredStrategy()
-        #nb_gpu = self.strategy.num_replicas_in_sync
-        #print("* Found {} GPU".format(nb_gpu))
-        #self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
+        # self.strategy = tf.distribute.MirroredStrategy()
+        # nb_gpu = self.strategy.num_replicas_in_sync
+        # print("* Found {} GPU".format(nb_gpu))
+        # self.global_batch_size = self.batch_size * self.strategy.num_replicas_in_sync
 
-        #with self.strategy.scope():
-        optimizer = Adam(0.0002, 0.5)
+        # with self.strategy.scope():
+        optimizer = Adam(config.optimizer.learning_rate, config.optimizer.momentum)
 
         # We use a pre-trained VGG19 model to extract image features from the high resolution
         # and the generated high resolution images and minimize the mse between them
         self.extractor = self.build_feature_extractor()
         self.extractor.trainable = False
         self.extractor.compile(loss='mse',
-                         optimizer=optimizer,
-                         metrics=['accuracy'])
+                               optimizer=optimizer,
+                               metrics=['accuracy'])
 
         # Configure data loader
-        #self.dataset_name = './data/img_align_celeba'
-        self.dataset_name = '../coco/'
-        self.data_loader = DataLoader(dataset_name="{}train2017/".format(self.dataset_name),
+        self.data_dir = config.data.base_dir
+        self.dataset_name = config.data.dataset
+        self.data_path = "{}/{}".format(self.data_dir, self.dataset_name)
+        self.data_loader = DataLoader(dataset_name="{}/{}".format(self.data_path, config.data.datasubset),
                                       img_res=(self.hr_height, self.hr_width))
 
         # Calculate output shape of D (PatchGAN)
@@ -77,16 +79,16 @@ class SRGAN:
         self.disc_patch = (patch, patch, 1)
 
         # Number of filters in the first layer of G and D
-        self.gf = 64
-        self.df = 64
+        self.gf = config.model.filters
+        self.df = config.model.filters
 
-        #with self.strategy.scope():
+        # with self.strategy.scope():
         # Build and compile the discriminator
         self.discriminator = self.build_discriminator()
         self.discriminator.compile(loss='mse',
                                    optimizer=optimizer,
                                    metrics=['accuracy'])
-        self.ckpt_dics = cm.CheckpointManager(self.discriminator, optimizer, self.ckpt_dir, "discriminator", self.ckpt_max_to_keep)
+        self.ckpt_dics = helpers.CheckpointManager(self.discriminator, optimizer, "discriminator", self.ckpt_dir)
 
         # Build the generator
         self.generator = self.build_generator()
@@ -97,8 +99,7 @@ class SRGAN:
 
         # Generate high res. version from low res.
         fake_hr = self.generator(img_lr)
-        self.ckpt_generator = cm.CheckpointManager(self.generator, optimizer, self.ckpt_dir, "generator",
-                                                        self.ckpt_max_to_keep)
+        self.ckpt_generator = helpers.CheckpointManager(self.generator, optimizer, "generator", self.ckpt_dir)
 
         # Extract image features of the generated img
         fake_features = self.extractor(fake_hr)
@@ -113,14 +114,14 @@ class SRGAN:
         self.combined.compile(loss=['binary_crossentropy', 'mse'],
                               loss_weights=[1e-3, 1],
                               optimizer=optimizer)
-        self.ckpt_combined = cm.CheckpointManager(self.combined, optimizer, self.ckpt_dir, "combined", self.ckpt_max_to_keep)
+        self.ckpt_combined = helpers.CheckpointManager(self.combined, optimizer, "combined", self.ckpt_dir)
 
     def build_feature_extractor(self):
         """
         Builds a pre-trained Feature Extractor model that outputs image features extracted at the
         third block of the model
         """
-        #extractor = EfficientNetB7(weights="imagenet", input_shape=self.hr_shape, include_top=False)
+        # extractor = EfficientNetB7(weights="imagenet", input_shape=self.hr_shape, include_top=False)
         # Tried:
         # - no change: no shape
         # - block6m_add: shapes in only yellow and red
@@ -133,7 +134,7 @@ class SRGAN:
         # - block1d_add: No shape - no color
         # - block3b_add: Yellow, and noise
         # - block3b_drop: blue
-        #output_layer = extractor.get_layer("block4b_add")
+        # output_layer = extractor.get_layer("block4b_add")
 
         extractor = VGG19(weights="imagenet", input_shape=self.hr_shape, include_top=False)
         output_layer = extractor.layers[9]
@@ -145,8 +146,8 @@ class SRGAN:
         def residual_block(layer_input, filters):
             """Residual block described in paper"""
             d = Conv2D(filters, kernel_size=3, strides=1, padding='same')(layer_input)
-            d = Activation('relu')(d)
             d = BatchNormalization(momentum=0.8)(d)
+            d = PReLU()(d)
             d = Conv2D(filters, kernel_size=3, strides=1, padding='same')(d)
             d = BatchNormalization(momentum=0.8)(d)
             d = Add()([d, layer_input])
@@ -154,17 +155,17 @@ class SRGAN:
 
         def deconv2d(layer_input):
             """Layers used during upsampling"""
-            u = UpSampling2D(size=2)(layer_input)
-            u = Conv2D(256, kernel_size=3, strides=1, padding='same')(u)
-            u = Activation('relu')(u)
+            u = Conv2D(256, kernel_size=3, strides=1, padding='same')(layer_input)
+            u = UpSampling2D(size=2)(u)
+            u = PReLU()(u)
             return u
 
         # Low resolution image input
         img_lr = Input(shape=self.lr_shape)
 
         # Pre-residual block
-        c1 = Conv2D(64, kernel_size=9, strides=1, padding='same')(img_lr)
-        c1 = Activation('relu')(c1)
+        c1 = Conv2D(self.gf, kernel_size=9, strides=1, padding='same')(img_lr)
+        c1 = PReLU()(c1)
 
         # Propogate through residual blocks
         r = residual_block(c1, self.gf)
@@ -172,7 +173,7 @@ class SRGAN:
             r = residual_block(r, self.gf)
 
         # Post-residual block
-        c2 = Conv2D(64, kernel_size=3, strides=1, padding='same')(r)
+        c2 = Conv2D(self.gf, kernel_size=3, strides=1, padding='same')(r)
         c2 = BatchNormalization(momentum=0.8)(c2)
         c2 = Add()([c2, c1])
 
@@ -215,21 +216,13 @@ class SRGAN:
 
     def train(self, epochs, sample_interval=50):
 
-
-        #options = tf.data.Options()
-        #options.experimental_distribute.auto_shard_policy = tf.data.experimental.AutoShardPolicy.DATA
-
-        ds = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=batch_size, data_dir=self.dataset_name)
+        ds = dl.get_data(hr_size=(self.hr_height, self.hr_width), batch_size=self.batch_size, data_dir=self.data_path)
         ds_size = tf.data.experimental.cardinality(ds)
-        #ds_hr = ds_hr.with_options(options)
-        #ds_lr = ds_lr.with_options(options)
 
-        # ds_hr = self.strategy.experimental_distribute_dataset(ds_hr)
-        # ds_lr = self.strategy.experimental_distribute_dataset(ds_lr)
         print("Total iteration per epochs: {}".format(ds_size))
 
         train_loss = tf.keras.metrics.Mean('train_loss', dtype=tf.float32)
-        logevents = lev.LogEvents(log_dir=self.log_dir)
+        logevents = helpers.LogEvents(log_dir=self.log_dir, name=self.experimentation_name)
 
         for epoch in trange(epochs):
             disc_turn = True
@@ -239,6 +232,7 @@ class SRGAN:
             if self.profile:
                 tf.profiler.experimental.start(self.log_dir)
             g_loss = None
+
             for imgs_hr in ds:
 
                 imgs_lr = tf.image.resize(imgs_hr, (self.lr_height, self.lr_width))
@@ -254,7 +248,7 @@ class SRGAN:
                     # Train the discriminators (original images = real / generated = Fake)
                     d_loss_real = self.discriminator.train_on_batch(imgs_hr, valid)
                     d_loss_fake = self.discriminator.train_on_batch(fake_hr, fake)
-                    #d_loss, accuracy = 0.5 * np.add(d_loss_real, d_loss_fake)
+                    # d_loss, accuracy = 0.5 * np.add(d_loss_real, d_loss_fake)
                     # pbar.set_description("Loss Discriminator: {}".format(d_loss))
                     disc_turn = False
                 else:
@@ -272,7 +266,7 @@ class SRGAN:
                     train_loss.update_state(g_loss)
                     logevents.log_train(step, train_loss.result())
                     disc_turn = True
-                pbar.set_description("[Step {}/{}] Loss Generator: {}".format(step, ds_size, g_loss))
+                pbar.set_description("[Step {}/{}] Loss: {}".format(step, ds_size, g_loss))
                 pbar.update(1)
                 step += 1
                 # If at save interval => save generated image samples
@@ -281,16 +275,12 @@ class SRGAN:
             if self.profile:
                 tf.profiler.experimental.stop()
             self.sample_images(epoch, step)
-            #self.discriminator.save_weights("./checkpoints_disc")
-            #self.generator.save_weights("./checkpoints_gen")
-            #self.combined.save_weights("./checkpoints_comb")
 
             self.ckpt_dics.save(train_loss.result())
             self.ckpt_generator.save(train_loss.result())
             self.ckpt_combined.save(train_loss.result())
 
             pbar.close()
-            #logevents.reset(train_loss)
 
     def sample_images(self, epoch, step):
         os.makedirs('images/%s' % self.dataset_name, exist_ok=True)
@@ -314,25 +304,43 @@ class SRGAN:
                 axs[row, col].set_title(titles[col])
                 axs[row, col].axis('off')
             cnt += 1
-        fig.savefig("images/%s/epoch-%d_step-%d.png" % (self.dataset_name, epoch, step))
+        fig.savefig("images/{}/epoch-{}_step-{}.png".format(self.dataset_name, epoch, step))
         plt.close()
-
-        # Save low resolution images for comparison
-        #for i in range(r):
-        #    fig = plt.figure()
-        #    plt.imshow(imgs_lr[i])
-        #    fig.savefig('images/%s/%d_lowres%d.png' % (self.dataset_name, epoch, i))
-        #    plt.close()
-
 
 
 if __name__ == '__main__':
-    gpus = tf.config.experimental.list_physical_devices('GPU')
-    if gpus:
-        for gpu in gpus:
-            tf.config.experimental.set_memory_growth(gpu, True)
+    """
+    Start of the program to train/predict/evaluate
+    """
+    # Disable TF verbose logs
+    helpers.quiet_tf()
 
-    batch_size = 32
-    print("Batch Size:", batch_size)
-    gan = SRGAN(profile=False, batch_size=batch_size)
-    gan.train(epochs=3000, sample_interval=50)
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger(__name__)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--conf", default="orignal", help="'orignal' or 'test' config file")
+    parser.add_argument("--mode", default="train", help="train or predict")
+    parser.add_argument("--image", default="", help="path to an image (test mode)")
+    args = parser.parse_args()
+
+    # Set memory growth on GPU
+    helpers.memory_growth()
+
+    config_manager = helpers.ConfigManager(args.conf)
+    config = config_manager.get_conf()
+
+    if args.mode == "predict":
+        if args.image is not None:
+            # TODO
+            #predict(config, args.image)
+            pass
+        else:
+            ValueError("'image' argument needs to be specified")
+    elif args.mode == "train":
+        # Default mode
+
+        experimentation_name = "res_block{}_batch{}_lr20-5_filters{}"\
+            .format(config.model.n_residual_blocks, config.training.batch_size, config.model.filters)
+        gan = SRGAN(config)
+        gan.train(epochs=3000, sample_interval=500)
