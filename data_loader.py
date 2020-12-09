@@ -2,7 +2,10 @@ from glob import glob
 import numpy as np
 from PIL import Image
 import tensorflow as tf
+import logging
 
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 class DataLoader:
     def __init__(self, dataset_name, img_res=(128, 128)):
@@ -51,7 +54,7 @@ def flip(image):
 
 def get_data(hr_size, batch_size, data_dir="./data/"):
 
-    print("Preprocessing data for HR{} from {}".format(hr_size, data_dir))
+    log.info("Preprocessing data for HR{} from {}".format(hr_size, data_dir))
     AUTOTUNE = tf.data.experimental.AUTOTUNE
     ds = tf.keras.preprocessing.image_dataset_from_directory(data_dir, image_size=hr_size, label_mode=None,
                                                              batch_size=batch_size) \

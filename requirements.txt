@@ -1,7 +1,6 @@
 tensorflow==2.5.0
 matplotlib~=3.3.3
 pillow~=8.0.1
-tqdm~=4.54.1
 numpy~=1.19.4
 tensorboard-plugin-profile==2.3.0
 boto3

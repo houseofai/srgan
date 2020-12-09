@@ -1,24 +1,24 @@
-mode: "train"
+mode: "grid_search"
 training:
-  epochs: 300
-  batch_size: 32
+  epochs: 2
+  batch_size: 4 # [4, 8, 16, 32]
   scale: 4
   low_res: 64
   sample_interval: 500
 
 optimizer:
-  learning_rate: 0.0002
-  momentum: 0.5
+  learning_rate: 0.0002 #[0.005, 0.001, 0.0005, 0.0002, 0.00005]
+  momentum: 0.5 #[0.3, 0.5, 0.7]
 
 model:
-  n_residual_blocks: 16
-  g_filters: 64
-  d_filters: 64
+  n_residual_blocks: [4, 8, 16, 32]
+  g_filters: [16, 32, 64, 128]
+  d_filters: [16, 32, 64, 128]
 
 data:
   base_dir: "/home/begood/git/datasets"
-  dataset: "coco" # "celeba"
-  datasubset: "train2017" # "img_align_celeba"
+  dataset: "coco_test"
+  datasubset: "val2017"
 
 checkpoint:
   dir: "checkpoints"
